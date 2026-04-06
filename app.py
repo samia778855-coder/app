@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify, render_template_string
 import sqlite3
 import os
 import json
-import time
 from datetime import datetime
 
 app = Flask(__name__)
@@ -23,7 +22,6 @@ def init_db():
     cur.execute('''
         CREATE TABLE IF NOT EXISTS attempts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            activity TEXT NOT NULL,
             group_name TEXT NOT NULL,
             elapsed_seconds REAL NOT NULL,
             score INTEGER NOT NULL DEFAULT 0,
@@ -40,41 +38,24 @@ ACTIVITY_ONE_CORRECT = {
     'المدى': '11'
 }
 
-ACTIVITY_TWO_QUESTIONS = [
+QUESTIONS = [
     {
         'id': 1,
-        'type': 'mcq',
         'text': 'إذا كان المنوال للقيم ٥ ، ٩ ، ٢١ ، ١٧ ، ٣س هو ٢١ . حوط قيمة س',
         'choices': ['٧', '٩', '٢١', '٢٧'],
         'answer': '٧'
     },
     {
         'id': 2,
-        'type': 'mcq',
         'text': 'حوط الإجابة الصحيحة: المدى للقيم الآتية: ١٩ ، ٢٦ ، ١٧ ، ٣٢ ، ٢٦',
         'choices': ['١٥', '١٦', '٢٤', '٢٦'],
         'answer': '١٥'
     },
     {
         'id': 3,
-        'type': 'mcq',
         'text': 'يعرض الإطار المقابل أطوال ستة أشخاص (بالمتر): ١٫٤٢ ، ١٫٥٤ ، ١٫٥٤ ، ١٫٦٥ ، ١٫٧٠ ، ١٫٧٢ . حوط قيمة المدى للأطوال (بالمتر)',
         'choices': ['٠٫٣٠', '٠٫٤٢', '٠٫٧٢', '١٫٥٤'],
         'answer': '٠٫٣٠'
-    },
-    {
-        'id': 4,
-        'type': 'input',
-        'text': 'يوضح الإطار المقابل أعداد الطلاب في تسعة صفوف مختلفة: ٢٣ ، ١٩ ، ١٩ ، ١٨ ، ٢٤ ، ٢٠ ، ١٩ ، ١٨ ، ٢٠ . أوجد ما يلي:',
-        'frame_values': '٢٣ ، ١٩ ، ١٩ ، ١٨ ، ٢٤ ، ٢٠ ، ١٩ ، ١٨ ، ٢٠',
-        'fields': [
-            {'name': 'mode', 'label': 'المنوال'},
-            {'name': 'mean', 'label': 'الوسط الحسابي'}
-        ],
-        'answers': {
-            'mode': '١٩',
-            'mean': '٢٠'
-        }
     }
 ]
 
@@ -90,7 +71,7 @@ PAGE = '''
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: "Tahoma", "Arial", sans-serif;
+      font-family: Tahoma, Arial, sans-serif;
       background:
         radial-gradient(circle at top right, rgba(148, 87, 235, 0.18), transparent 26%),
         radial-gradient(circle at top left, rgba(65, 161, 255, 0.22), transparent 24%),
@@ -185,7 +166,7 @@ PAGE = '''
       padding: 14px 16px;
       border-radius: 16px;
       border: 1px solid rgba(255,255,255,.2);
-      background: rgba(255,255,255,.9);
+      background: rgba(255,255,255,.95);
       color: #10234b;
       font-size: 18px;
       font-family: inherit;
@@ -267,7 +248,6 @@ PAGE = '''
     }
     .pink-box {
       background: #ef8fa1;
-      border-radius: 0;
       max-width: 660px;
       margin: 0 auto 28px;
       padding: 22px 18px;
@@ -397,6 +377,13 @@ PAGE = '''
       letter-spacing: normal;
     }
 
+    .section-title {
+      text-align: center;
+      font-size: 28px;
+      font-weight: 700;
+      color: #ffe39c;
+      margin: 18px 0 12px;
+    }
     .question-card {
       background: #fff;
       color: #111;
@@ -416,17 +403,6 @@ PAGE = '''
       font-weight: 700;
       line-height: 1.9;
       margin-bottom: 18px;
-    }
-    .boxed-values {
-      border: 4px solid #000;
-      border-radius: 22px;
-      padding: 18px 22px;
-      text-align: center;
-      font-size: 32px;
-      font-weight: 700;
-      width: fit-content;
-      margin: 12px auto 24px;
-      background: #fff;
     }
     .instruction {
       text-align: center;
@@ -456,28 +432,7 @@ PAGE = '''
     .choice-btn:hover { transform: translateY(-2px); }
     .choice-btn.correct { background: #d9f7d9; border-color: #2e7d32; color: #175e20; }
     .choice-btn.wrong { background: #ffe1e1; border-color: #d32f2f; color: #8b0000; }
-    .input-area {
-      max-width: 700px;
-      margin: 0 auto;
-      display: grid;
-      gap: 18px;
-    }
-    .answer-row {
-      display: grid;
-      grid-template-columns: 220px 1fr;
-      gap: 16px;
-      align-items: center;
-    }
-    .answer-label {
-      font-size: 28px;
-      font-weight: 700;
-    }
-    .answer-row input {
-      font-size: 28px;
-      text-align: center;
-      border: 2px solid #222;
-      border-radius: 14px;
-    }
+
     .result-box {
       text-align: center;
       background: linear-gradient(135deg, rgba(255,255,255,.18), rgba(255,255,255,.08));
@@ -540,7 +495,6 @@ PAGE = '''
       color: #ffe39c;
       text-align: center;
     }
-    .hidden { display: none !important; }
     @media (max-width: 1100px) {
       .app-shell { grid-template-columns: 1fr; }
       .sidebar { position: static; height: auto; }
@@ -572,24 +526,19 @@ PAGE = '''
       </div>
 
       <div class="card leader-block">
-        <h3>🏆 صدارة النشاط الأول</h3>
-        <div id="leaderboard1"></div>
-      </div>
-
-      <div class="card leader-block">
-        <h3>🏆 صدارة النشاط الثاني</h3>
-        <div id="leaderboard2"></div>
+        <h3>🏆 صدارة النشاط</h3>
+        <div id="leaderboard"></div>
       </div>
 
       <div class="card">
-        <button class="btn btn-secondary" style="width:100%;margin-bottom:10px;" onclick="refreshLeaderboards()">🔄 تحديث المجموعات</button>
+        <button class="btn btn-secondary" style="width:100%;margin-bottom:10px;" onclick="refreshLeaderboard()">🔄 تحديث المجموعات</button>
         <button class="btn btn-danger" style="width:100%;" onclick="clearAllParticipants()">🗑 مسح المشاركين</button>
       </div>
 
       <div class="card tiny">
-        <div>• الصدارة محدثة لجميع الأجهزة.</div>
-        <div>• النشاط الأول: سحب وإفلات.</div>
-        <div>• النشاط الثاني: أسئلة تفاعلية.</div>
+        <div>• النشاط صار واحد فقط.</div>
+        <div>• يبدأ بالسحب والإفلات ثم الاختيار المتعدد.</div>
+        <div>• الصدارة مشتركة بين جميع الأجهزة.</div>
       </div>
     </aside>
 
@@ -609,13 +558,12 @@ PAGE = '''
           <div style="font-size:24px;font-weight:700;margin-bottom:12px;text-align:center;">ابدئي باسم المجموعة</div>
           <input type="text" id="groupNameInput" placeholder="اكتبي اسم المجموعة هنا">
           <div class="control-grid">
-            <button class="btn btn-primary" onclick="startActivityOne()">🚀 ابدأ النشاط الأول</button>
-            <button class="btn btn-muted" onclick="goToStage('stage-activity2-intro')">انتقال مباشر للنشاط الثاني</button>
+            <button class="btn btn-primary" onclick="startUnifiedActivity()">🚀 ابدأ النشاط</button>
           </div>
         </div>
       </section>
 
-      <section id="stage-activity1" class="stage">
+      <section id="stage-activity" class="stage">
         <div class="activity-board">
           <div class="notebook-rings">
             <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
@@ -669,50 +617,31 @@ PAGE = '''
               </div>
 
               <div class="control-grid" style="margin-top:26px;">
-                <button class="btn btn-secondary" onclick="checkActivityOne()">✅ تحقق من الإجابة</button>
-                <button class="btn btn-muted" onclick="resetActivityOne()">↺ إعادة النشاط</button>
+                <button class="btn btn-secondary" onclick="checkDragAndUnlock()">✅ تحقق من السحب والإفلات</button>
+                <button class="btn btn-muted" onclick="resetUnifiedActivity()">↺ إعادة النشاط</button>
               </div>
-              <div id="activityOneMsg" style="margin-top:14px;font-size:22px;font-weight:700;text-align:center;"></div>
+              <div id="activityMsg" style="margin-top:14px;font-size:22px;font-weight:700;text-align:center;"></div>
             </div>
           </div>
         </div>
-      </section>
 
-      <section id="stage-activity2-intro" class="stage">
-        <div class="hero">
-          <h2 class="center">النشاط الثاني</h2>
-          <div class="lesson-meta">
-            <div class="big-title">أسئلة تفاعلية عن المقاييس الإحصائية والمدى</div>
-            <div class="small">يبدأ التوقيت بمجرد الضغط على بدء النشاط</div>
-          </div>
-        </div>
-        <div class="card" style="max-width:760px;margin:22px auto 0;">
-          <div style="font-size:22px;font-weight:700;text-align:center;margin-bottom:10px;">اسم المجموعة</div>
-          <input type="text" id="groupNameInput2" placeholder="اكتبي اسم المجموعة للنشاط الثاني">
+        <div id="mcqSection" style="display:none; margin-top:18px;">
+          <div class="section-title">الآن أكملي نفس النشاط بالاختيار المتعدد</div>
+          <div id="questionsContainer"></div>
           <div class="control-grid">
-            <button class="btn btn-primary" onclick="startActivityTwo()">🚀 بدء النشاط الثاني</button>
-            <button class="btn btn-muted" onclick="goToStage('stage-home')">العودة للرئيسية</button>
+            <button class="btn btn-primary" onclick="finishUnifiedActivity()">🏁 إنهاء النشاط كاملاً</button>
           </div>
         </div>
-      </section>
-
-      <section id="stage-activity2" class="stage">
-        <div id="questionsContainer"></div>
-        <div class="control-grid">
-          <button class="btn btn-secondary" onclick="submitActivityTwo()">✅ إنهاء النشاط الثاني</button>
-          <button class="btn btn-muted" onclick="resetActivityTwo()">↺ إعادة الأسئلة</button>
-        </div>
-        <div id="activityTwoMsg" style="margin-top:14px;font-size:22px;font-weight:700;text-align:center;"></div>
       </section>
 
       <section id="stage-result" class="stage">
         <div class="result-box">
-          <h2>🎉 انتهى التحدي!</h2>
+          <h2>🎉 انتهى النشاط!</h2>
           <p id="resultText"></p>
           <p id="resultRank"></p>
           <div class="control-grid" style="max-width:700px;margin:18px auto 0;">
             <button class="btn btn-primary" onclick="goToStage('stage-home')">العودة للرئيسية</button>
-            <button class="btn btn-secondary" onclick="goToStage('stage-activity2-intro')">بدء النشاط الثاني</button>
+            <button class="btn btn-secondary" onclick="resetUnifiedActivity(); goToStage('stage-activity')">إعادة النشاط</button>
           </div>
         </div>
       </section>
@@ -727,12 +656,10 @@ PAGE = '''
 
   <script>
     let currentGroup = '';
-    let currentActivity = '';
     let startTime = null;
     let timerInterval = null;
-    let activityOneAnswers = { 'المنوال': null, 'الوسيط': null, 'المدى': null };
-    let activityTwoStarted = false;
-    const activityTwoQuestions = {{ questions_json | safe }};
+    let dragAnswers = { 'المنوال': null, 'الوسيط': null, 'المدى': null };
+    const questions = {{ questions_json | safe }};
 
     function goToStage(id) {
       document.querySelectorAll('.stage').forEach(s => s.classList.remove('active'));
@@ -766,21 +693,21 @@ PAGE = '''
       return elapsed;
     }
 
-    function startActivityOne() {
+    function startUnifiedActivity() {
       const name = document.getElementById('groupNameInput').value;
       if (!name.trim()) {
         alert('اكتبي اسم المجموعة أولًا');
         return;
       }
       setGroup(name);
-      currentActivity = 'activity1';
-      resetActivityOne(false);
-      goToStage('stage-activity1');
+      resetUnifiedActivity(false);
+      renderQuestions();
+      goToStage('stage-activity');
       startTimer();
     }
 
-    function resetActivityOne(clearMsg = true) {
-      activityOneAnswers = { 'المنوال': null, 'الوسيط': null, 'المدى': null };
+    function resetUnifiedActivity(clearMsg = true) {
+      dragAnswers = { 'المنوال': null, 'الوسيط': null, 'المدى': null };
       document.querySelectorAll('.dropzone').forEach(zone => {
         zone.innerHTML = '<span class="placeholder">اسحبي هنا</span>';
       });
@@ -788,91 +715,50 @@ PAGE = '''
         item.style.visibility = 'visible';
         item.style.pointerEvents = 'auto';
       });
-      if (clearMsg) document.getElementById('activityOneMsg').textContent = '';
+      document.getElementById('mcqSection').style.display = 'none';
+      if (clearMsg) document.getElementById('activityMsg').textContent = '';
+      renderQuestions();
     }
 
-    function checkActivityOne() {
-      const ok = activityOneAnswers['المنوال'] === '6' && activityOneAnswers['الوسيط'] === '4' && activityOneAnswers['المدى'] === '11';
-      const msg = document.getElementById('activityOneMsg');
-      if (!activityOneAnswers['المنوال'] || !activityOneAnswers['الوسيط'] || !activityOneAnswers['المدى']) {
+    function checkDragAndUnlock() {
+      const msg = document.getElementById('activityMsg');
+      if (!dragAnswers['المنوال'] || !dragAnswers['الوسيط'] || !dragAnswers['المدى']) {
         msg.style.color = '#b32121';
         msg.textContent = 'أكملي سحب جميع القيم أولًا.';
         return;
       }
+      const ok = dragAnswers['المنوال'] === '6' && dragAnswers['الوسيط'] === '4' && dragAnswers['المدى'] === '11';
       if (!ok) {
         msg.style.color = '#b32121';
         msg.textContent = 'بعض الإجابات غير صحيحة. حاولي مرة أخرى.';
         return;
       }
       msg.style.color = '#16752c';
-      msg.textContent = 'أحسنتِ! تم حل النشاط الأول بنجاح.';
-      const elapsed = stopTimer();
-      saveAttempt('activity1', currentGroup, elapsed, 100).then(rank => {
-        document.getElementById('resultText').textContent = `المجموعة: ${currentGroup} | زمن النشاط الأول: ${formatTime(elapsed)}`;
-        document.getElementById('resultRank').textContent = rank ? `ترتيبكم الحالي في النشاط الأول: ${rank}` : '';
-        goToStage('stage-result');
-        refreshLeaderboards();
-      });
-    }
-
-    function startActivityTwo() {
-      const name = document.getElementById('groupNameInput2').value || currentGroup;
-      if (!name.trim()) {
-        alert('اكتبي اسم المجموعة أولًا');
-        return;
-      }
-      setGroup(name);
-      currentActivity = 'activity2';
-      renderQuestions();
-      activityTwoStarted = true;
-      document.getElementById('activityTwoMsg').textContent = '';
-      goToStage('stage-activity2');
-      startTimer();
+      msg.textContent = 'أحسنتِ! تم فتح جزء الاختيار المتعدد.';
+      document.getElementById('mcqSection').style.display = 'block';
+      document.getElementById('mcqSection').scrollIntoView({ behavior: 'smooth' });
     }
 
     function renderQuestions() {
       const container = document.getElementById('questionsContainer');
       container.innerHTML = '';
-      activityTwoQuestions.forEach((q, idx) => {
+      questions.forEach((q, idx) => {
         const card = document.createElement('div');
         card.className = 'question-card';
         let html = `<div class="q-num">${idx + 1}</div><div class="q-text">${q.text}</div>`;
-        if (q.type === 'mcq') {
-          html += `<div class="instruction">حوط الإجابة الصحيحة</div><div class="choices">`;
-          q.choices.forEach(choice => {
-            html += `<button class="choice-btn" data-qid="${q.id}" data-value="${choice}" onclick="answerMCQ(this)">${choice}</button>`;
-          });
-          html += `</div>`;
-        } else {
-          html += `<div class="boxed-values">${q.frame_values}</div>`;
-          html += `<div class="instruction">أوجد ما يلي :</div><div class="input-area">`;
-          q.fields.forEach(field => {
-            html += `
-              <div class="answer-row">
-                <div class="answer-label">${field.label}</div>
-                <input type="text" data-qid="${q.id}" data-field="${field.name}" placeholder="اكتبي الإجابة هنا">
-              </div>`;
-          });
-          html += `</div>`;
-        }
+        html += `<div class="instruction">حوط الإجابة الصحيحة</div><div class="choices">`;
+        q.choices.forEach(choice => {
+          html += `<button class="choice-btn" data-qid="${q.id}" data-value="${choice}" onclick="answerMCQ(this)">${choice}</button>`;
+        });
+        html += `</div>`;
         card.innerHTML = html;
         container.appendChild(card);
       });
     }
 
-    function normalizeArabicNumber(val) {
-      return (val || '')
-        .replace(/\s+/g, '')
-        .replace(/٠/g, '0').replace(/١/g, '1').replace(/٢/g, '2').replace(/٣/g, '3').replace(/٤/g, '4')
-        .replace(/٥/g, '5').replace(/٦/g, '6').replace(/٧/g, '7').replace(/٨/g, '8').replace(/٩/g, '9')
-        .replace(/٫/g, '.')
-        .replace(/,/g, '')
-        .replace(/،/g, '');
-    }
-
     function answerMCQ(btn) {
       const qid = Number(btn.dataset.qid);
-      const q = activityTwoQuestions.find(x => x.id === qid);
+      const q = questions.find(x => x.id === qid);
       const parent = btn.parentElement;
       [...parent.querySelectorAll('.choice-btn')].forEach(b => {
         b.disabled = true;
@@ -881,77 +767,57 @@ PAGE = '''
       if (btn.dataset.value !== q.answer) btn.classList.add('wrong');
     }
 
-    function submitActivityTwo() {
-      const msg = document.getElementById('activityTwoMsg');
-      let score = 0;
-      let total = 0;
+    function finishUnifiedActivity() {
+      const answeredCount = document.querySelectorAll('.choices').length;
+      const completedCount = [...document.querySelectorAll('.choices')].filter(box =>
+        [...box.querySelectorAll('.choice-btn')].some(btn => btn.disabled)
+      ).length;
 
-      activityTwoQuestions.forEach(q => {
-        if (q.type === 'mcq') {
-          total += 1;
-          const buttons = document.querySelectorAll(`.choice-btn[data-qid="${q.id}"]`);
-          const selected = [...buttons].find(b => b.classList.contains('correct') || b.classList.contains('wrong'));
-          if (selected) {
-            const clickedWrong = [...buttons].some(b => b.classList.contains('wrong'));
-            if (!clickedWrong) score += 1;
-          }
-        } else {
-          total += q.fields.length;
-          q.fields.forEach(field => {
-            const input = document.querySelector(`input[data-qid="${q.id}"][data-field="${field.name}"]`);
-            const user = normalizeArabicNumber(input.value);
-            const ans = normalizeArabicNumber(q.answers[field.name]);
-            if (user === ans) {
-              score += 1;
-              input.style.background = '#d9f7d9';
-            } else {
-              input.style.background = '#ffe1e1';
-            }
-          });
-        }
+      if (document.getElementById('mcqSection').style.display === 'none') {
+        alert('أنهي السحب والإفلات أولًا.');
+        return;
+      }
+      if (completedCount < answeredCount) {
+        alert('أكملي جميع أسئلة الاختيار المتعدد أولًا.');
+        return;
+      }
+
+      let score = 3;
+      questions.forEach(q => {
+        const buttons = document.querySelectorAll(`.choice-btn[data-qid="${q.id}"]`);
+        const clickedWrong = [...buttons].some(b => b.classList.contains('wrong'));
+        if (!clickedWrong) score += 1;
       });
 
       const elapsed = stopTimer();
-      msg.style.color = '#16752c';
-      msg.textContent = `تم إنهاء النشاط الثاني. الدرجة: ${score} / ${total}`;
-      saveAttempt('activity2', currentGroup, elapsed, score).then(rank => {
-        document.getElementById('resultText').textContent = `المجموعة: ${currentGroup} | زمن النشاط الثاني: ${formatTime(elapsed)} | الدرجة: ${score}/${total}`;
-        document.getElementById('resultRank').textContent = rank ? `ترتيبكم الحالي في النشاط الثاني: ${rank}` : '';
+      saveAttempt(currentGroup, elapsed, score).then(rank => {
+        document.getElementById('resultText').textContent = `المجموعة: ${currentGroup} | الزمن: ${formatTime(elapsed)} | الدرجة: ${score}/6`;
+        document.getElementById('resultRank').textContent = rank ? `ترتيبكم الحالي: ${rank}` : '';
         goToStage('stage-result');
-        refreshLeaderboards();
+        refreshLeaderboard();
       });
     }
 
-    function resetActivityTwo() {
-      renderQuestions();
-      document.getElementById('activityTwoMsg').textContent = '';
-    }
-
-    async function saveAttempt(activity, groupName, elapsed, score) {
+    async function saveAttempt(groupName, elapsed, score) {
       const res = await fetch('/api/save_attempt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ activity, group_name: groupName, elapsed_seconds: elapsed, score })
+        body: JSON.stringify({ group_name: groupName, elapsed_seconds: elapsed, score })
       });
       const data = await res.json();
       return data.rank;
     }
 
-    async function refreshLeaderboards() {
-      const res = await fetch('/api/leaderboards');
+    async function refreshLeaderboard() {
+      const res = await fetch('/api/leaderboard');
       const data = await res.json();
-      renderLeaderboard('leaderboard1', data.activity1 || []);
-      renderLeaderboard('leaderboard2', data.activity2 || []);
-    }
-
-    function renderLeaderboard(targetId, rows) {
-      const holder = document.getElementById(targetId);
-      if (!rows.length) {
+      const holder = document.getElementById('leaderboard');
+      if (!data.length) {
         holder.innerHTML = '<div class="tiny">لا توجد نتائج بعد.</div>';
         return;
       }
       const medals = ['🥇', '🥈', '🥉'];
-      holder.innerHTML = rows.map((row, idx) => `
+      holder.innerHTML = data.map((row, idx) => `
         <div class="leader-item">
           <div class="medal">${medals[idx] || (idx + 1)}</div>
           <div>
@@ -967,12 +833,12 @@ PAGE = '''
       const ok = confirm('هل تريدين بالفعل مسح جميع المشاركين والنتائج؟');
       if (!ok) return;
       await fetch('/api/clear_attempts', { method: 'POST' });
-      refreshLeaderboards();
+      refreshLeaderboard();
       alert('تم مسح المشاركين بنجاح.');
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-      refreshLeaderboards();
+      refreshLeaderboard();
 
       let dragged = null;
       document.querySelectorAll('.drag-item').forEach(item => {
@@ -995,14 +861,14 @@ PAGE = '''
           const value = dragged.dataset.value;
           const zoneName = zone.dataset.zone;
 
-          const previousZone = Object.keys(activityOneAnswers).find(k => activityOneAnswers[k] === value);
+          const previousZone = Object.keys(dragAnswers).find(k => dragAnswers[k] === value);
           if (previousZone) {
-            activityOneAnswers[previousZone] = null;
+            dragAnswers[previousZone] = null;
             const prevZoneEl = document.querySelector(`.dropzone[data-zone="${previousZone}"]`);
             prevZoneEl.innerHTML = '<span class="placeholder">اسحبي هنا</span>';
           }
 
-          activityOneAnswers[zoneName] = value;
+          dragAnswers[zoneName] = value;
           zone.textContent = dragged.textContent;
           dragged.style.visibility = 'hidden';
           dragged.style.pointerEvents = 'none';
@@ -1018,26 +884,25 @@ PAGE = '''
 
 @app.route('/')
 def home():
-    return render_template_string(PAGE, questions_json=json.dumps(ACTIVITY_TWO_QUESTIONS, ensure_ascii=False))
+    return render_template_string(PAGE, questions_json=json.dumps(QUESTIONS, ensure_ascii=False))
 
 
 @app.route('/api/save_attempt', methods=['POST'])
 def save_attempt():
     data = request.get_json(force=True)
-    activity = data.get('activity', '').strip()
     group_name = data.get('group_name', '').strip()
     elapsed_seconds = float(data.get('elapsed_seconds', 0))
     score = int(data.get('score', 0))
 
-    if activity not in ('activity1', 'activity2') or not group_name or elapsed_seconds <= 0:
+    if not group_name or elapsed_seconds <= 0:
         return jsonify({'ok': False, 'error': 'بيانات غير صالحة'}), 400
 
     created_at = datetime.utcnow().isoformat()
     conn = get_db()
     cur = conn.cursor()
     cur.execute(
-        'INSERT INTO attempts (activity, group_name, elapsed_seconds, score, created_at) VALUES (?, ?, ?, ?, ?)',
-        (activity, group_name, elapsed_seconds, score, created_at)
+        'INSERT INTO attempts (group_name, elapsed_seconds, score, created_at) VALUES (?, ?, ?, ?)',
+        (group_name, elapsed_seconds, score, created_at)
     )
     conn.commit()
 
@@ -1045,11 +910,9 @@ def save_attempt():
         '''
         SELECT group_name, MIN(elapsed_seconds) AS best_time, MAX(score) AS best_score
         FROM attempts
-        WHERE activity = ?
         GROUP BY group_name
         ORDER BY best_time ASC, best_score DESC, group_name ASC
-        ''',
-        (activity,)
+        '''
     )
     rows = cur.fetchall()
     conn.close()
@@ -1063,28 +926,24 @@ def save_attempt():
     return jsonify({'ok': True, 'rank': rank})
 
 
-@app.route('/api/leaderboards')
-def leaderboards():
+@app.route('/api/leaderboard')
+def leaderboard():
     conn = get_db()
     cur = conn.cursor()
-    result = {}
-    for activity in ('activity1', 'activity2'):
-        cur.execute(
-            '''
-            SELECT group_name,
-                   MIN(elapsed_seconds) AS elapsed_seconds,
-                   MAX(score) AS score
-            FROM attempts
-            WHERE activity = ?
-            GROUP BY group_name
-            ORDER BY elapsed_seconds ASC, score DESC, group_name ASC
-            LIMIT 10
-            ''',
-            (activity,)
-        )
-        result[activity] = [dict(row) for row in cur.fetchall()]
+    cur.execute(
+        '''
+        SELECT group_name,
+               MIN(elapsed_seconds) AS elapsed_seconds,
+               MAX(score) AS score
+        FROM attempts
+        GROUP BY group_name
+        ORDER BY elapsed_seconds ASC, score DESC, group_name ASC
+        LIMIT 10
+        '''
+    )
+    rows = [dict(row) for row in cur.fetchall()]
     conn.close()
-    return jsonify(result)
+    return jsonify(rows)
 
 
 @app.route('/api/clear_attempts', methods=['POST'])
@@ -1101,3 +960,4 @@ if __name__ == '__main__':
     init_db()
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
