@@ -1,1144 +1,1103 @@
 from flask import Flask, request, jsonify, render_template_string
 import sqlite3
 import os
+import json
+import time
 from datetime import datetime
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'math-lesson-secret-key'
 
-DB_NAME = "leaderboard.db"
+DB_PATH = '/mnt/data/interactive_math_lesson.db' if os.path.exists('/mnt/data') else 'interactive_math_lesson.db'
 
-HTML_PAGE = """
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            activity TEXT NOT NULL,
+            group_name TEXT NOT NULL,
+            elapsed_seconds REAL NOT NULL,
+            score INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+
+ACTIVITY_ONE_CORRECT = {
+    'المنوال': '6',
+    'الوسيط': '4',
+    'المدى': '11'
+}
+
+ACTIVITY_TWO_QUESTIONS = [
+    {
+        'id': 1,
+        'type': 'mcq',
+        'text': 'إذا كان المنوال للقيم ٥ ، ٩ ، ٢١ ، ١٧ ، ٣س هو ٢١ . حوط قيمة س',
+        'choices': ['٧', '٩', '٢١', '٢٧'],
+        'answer': '٧'
+    },
+    {
+        'id': 2,
+        'type': 'mcq',
+        'text': 'حوط الإجابة الصحيحة: المدى للقيم الآتية: ١٩ ، ٢٦ ، ١٧ ، ٣٢ ، ٢٦',
+        'choices': ['١٥', '١٦', '٢٤', '٢٦'],
+        'answer': '١٥'
+    },
+    {
+        'id': 3,
+        'type': 'mcq',
+        'text': 'يعرض الإطار المقابل أطوال ستة أشخاص (بالمتر): ١٫٤٢ ، ١٫٥٤ ، ١٫٥٤ ، ١٫٦٥ ، ١٫٧٠ ، ١٫٧٢ . حوط قيمة المدى للأطوال (بالمتر)',
+        'choices': ['٠٫٣٠', '٠٫٤٢', '٠٫٧٢', '١٫٥٤'],
+        'answer': '٠٫٣٠'
+    },
+    {
+        'id': 4,
+        'type': 'input',
+        'text': 'يوضح الإطار المقابل أعداد الطلاب في تسعة صفوف مختلفة: ٢٣ ، ١٩ ، ١٩ ، ١٨ ، ٢٤ ، ٢٠ ، ١٩ ، ١٨ ، ٢٠ . أوجد ما يلي:',
+        'frame_values': '٢٣ ، ١٩ ، ١٩ ، ١٨ ، ٢٤ ، ٢٠ ، ١٩ ، ١٨ ، ٢٠',
+        'fields': [
+            {'name': 'mode', 'label': 'المنوال'},
+            {'name': 'mean', 'label': 'الوسط الحسابي'}
+        ],
+        'answers': {
+            'mode': '١٩',
+            'mean': '٢٠'
+        }
+    }
+]
+
+
+PAGE = '''
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>المقاييس الإحصائية والمدى</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>درس تفاعلي - المقاييس الإحصائية والمدى</title>
   <style>
     * { box-sizing: border-box; }
-
     body {
       margin: 0;
-      font-family: Tahoma, Arial, sans-serif;
+      font-family: "Tahoma", "Arial", sans-serif;
       background:
-        radial-gradient(circle at top right, rgba(122, 201, 255, 0.25), transparent 25%),
-        radial-gradient(circle at bottom left, rgba(183, 129, 255, 0.25), transparent 25%),
-        linear-gradient(135deg, #eef8ff, #f9f2ff, #fffdf6);
-      color: #24324a;
+        radial-gradient(circle at top right, rgba(148, 87, 235, 0.18), transparent 26%),
+        radial-gradient(circle at top left, rgba(65, 161, 255, 0.22), transparent 24%),
+        linear-gradient(135deg, #0c1633, #132a61 45%, #163d80 100%);
+      color: #fff;
       min-height: 100vh;
       overflow-x: hidden;
     }
-
     .math-bg {
       position: fixed;
       inset: 0;
       pointer-events: none;
-      opacity: 0.08;
-      font-size: 42px;
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      place-items: center;
-      z-index: 0;
-    }
-
-    .container {
-      position: relative;
-      z-index: 1;
-      width: min(1400px, 96%);
-      margin: 18px auto;
-    }
-
-    .top-header {
-      background: rgba(255,255,255,0.82);
-      border: 2px solid rgba(120, 150, 255, 0.25);
-      backdrop-filter: blur(8px);
-      border-radius: 28px;
-      box-shadow: 0 12px 35px rgba(61, 90, 128, 0.12);
-      padding: 24px 18px;
-      text-align: center;
-    }
-
-    .school {
-      font-size: 2rem;
-      font-weight: 800;
-      color: #224c8f;
-      margin-bottom: 6px;
-    }
-
-    .center-title {
-      font-size: 1.4rem;
-      font-weight: 700;
-      color: #5b4ab1;
-      margin-bottom: 6px;
-    }
-
-    .platform-title {
-      font-size: 1.3rem;
-      font-weight: 700;
-      color: #1b9aaa;
-      margin-bottom: 14px;
-    }
-
-    .lesson-title {
-      font-size: 2rem;
-      font-weight: 900;
-      background: linear-gradient(90deg, #1d6fd6, #8b4fd9, #ff7c6d);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      margin-bottom: 8px;
-    }
-
-    .lesson-subtitle {
-      font-size: 1.2rem;
-      font-weight: 700;
-      color: #334;
-      line-height: 1.8;
-    }
-
-    .main-grid {
-      display: grid;
-      grid-template-columns: 330px 1fr;
-      gap: 18px;
-      margin-top: 18px;
-    }
-
-    .side-panel, .content-panel {
-      background: rgba(255,255,255,0.85);
-      border-radius: 26px;
-      box-shadow: 0 12px 35px rgba(61, 90, 128, 0.12);
-      border: 2px solid rgba(120, 150, 255, 0.18);
-      backdrop-filter: blur(8px);
-    }
-
-    .side-panel {
-      padding: 18px;
-      position: sticky;
-      top: 12px;
-      height: fit-content;
-    }
-
-    .panel-title {
-      font-size: 1.2rem;
-      font-weight: 800;
-      color: #234;
-      margin-bottom: 12px;
-      text-align: center;
-    }
-
-    .group-box {
-      background: linear-gradient(135deg, #f4fbff, #fff8f1);
-      border-radius: 18px;
-      padding: 14px;
-      margin-bottom: 14px;
-      border: 1px solid rgba(0,0,0,0.06);
-    }
-
-    label {
-      display: block;
-      font-weight: 700;
-      margin-bottom: 8px;
-      color: #345;
-    }
-
-    input[type="text"] {
-      width: 100%;
-      border: 2px solid #d7e2f5;
-      border-radius: 14px;
-      padding: 12px 14px;
-      font-size: 1rem;
-      outline: none;
-      transition: 0.25s;
-    }
-
-    input[type="text"]:focus {
-      border-color: #7a9cff;
-      box-shadow: 0 0 0 4px rgba(122,156,255,0.16);
-    }
-
-    .btn {
-      width: 100%;
-      border: none;
-      border-radius: 14px;
-      padding: 12px 16px;
-      font-size: 1rem;
-      font-weight: 800;
-      cursor: pointer;
-      transition: 0.2s ease;
-      margin-top: 10px;
-    }
-
-    .btn:hover { transform: translateY(-2px); }
-
-    .btn-primary {
-      background: linear-gradient(90deg, #1d8cf8, #6a5cff);
-      color: #fff;
-      box-shadow: 0 10px 20px rgba(70, 90, 200, 0.22);
-    }
-
-    .btn-secondary {
-      background: linear-gradient(90deg, #18b7a0, #42c96d);
-      color: #fff;
-    }
-
-    .btn-danger {
-      background: linear-gradient(90deg, #ff6c6c, #ff9248);
-      color: #fff;
-    }
-
-    .timer-box, .status-box, .leaderboard-box {
-      background: linear-gradient(135deg, #fbfdff, #f7f7ff);
-      border: 1px solid rgba(0,0,0,0.06);
-      border-radius: 18px;
-      padding: 14px;
-      margin-bottom: 14px;
-    }
-
-    .timer {
-      font-size: 1.7rem;
-      font-weight: 900;
-      text-align: center;
-      color: #2155a3;
-    }
-
-    .small-note {
-      text-align: center;
-      font-size: 0.95rem;
-      color: #567;
-      line-height: 1.8;
-    }
-
-    .leaderboard-list {
-      margin: 0;
-      padding: 0;
-      list-style: none;
-    }
-
-    .leaderboard-list li {
-      background: linear-gradient(135deg, #fffdf3, #f7fbff);
-      border: 1px solid rgba(0,0,0,0.06);
-      border-radius: 14px;
-      padding: 10px 12px;
-      margin-bottom: 8px;
-      display: flex;
-      justify-content: space-between;
-      gap: 8px;
-      align-items: center;
-      font-weight: 700;
-    }
-
-    .content-panel { padding: 18px; }
-
-    .section { display: none; animation: fadeUp 0.45s ease; }
-    .section.active { display: block; }
-
-    @keyframes fadeUp {
-      from { opacity: 0; transform: translateY(18px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    .section-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
-      margin-bottom: 16px;
-    }
-
-    .section-title {
-      font-size: 1.55rem;
-      font-weight: 900;
-      color: #224;
-    }
-
-    .chip {
-      background: linear-gradient(90deg, #fff6c5, #ffe5d2);
-      color: #855400;
-      border-radius: 999px;
-      padding: 10px 14px;
-      font-weight: 800;
-      font-size: 0.95rem;
-    }
-
-    .intro-card {
-      background: linear-gradient(135deg, #eef8ff, #fff7fb);
-      border: 2px dashed #b6c8ef;
-      border-radius: 22px;
-      padding: 24px;
-      text-align: center;
-      line-height: 2;
-      margin-bottom: 18px;
-    }
-
-    .intro-card h2 {
-      margin: 0 0 10px;
-      color: #274690;
-      font-size: 1.8rem;
-    }
-
-    .intro-card p {
-      margin: 6px 0;
-      font-size: 1.15rem;
-      font-weight: 700;
-      color: #345;
-    }
-
-    .dataset-box {
-      background: linear-gradient(135deg, #ffdce6, #ffd7dd);
-      border-radius: 20px;
-      padding: 18px;
-      text-align: center;
-      font-size: 2rem;
-      font-weight: 900;
-      color: #7a2647;
-      letter-spacing: 4px;
-      margin-bottom: 18px;
-      line-height: 1.8;
-      border: 2px solid rgba(122,38,71,0.08);
-    }
-
-    .activity-layout {
-      display: grid;
-      grid-template-columns: 240px 1fr;
-      gap: 20px;
-      align-items: start;
-    }
-
-    .scoops {
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      align-items: center;
-    }
-
-    .scoop {
-      width: 130px;
-      height: 95px;
-      border-radius: 65% 65% 50% 50% / 70% 70% 35% 35%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 2.2rem;
-      font-weight: 900;
-      color: #1f1f1f;
-      box-shadow: 0 10px 18px rgba(0,0,0,0.16);
-      border: 3px solid rgba(0,0,0,0.14);
-      cursor: grab;
-      user-select: none;
-      transition: transform 0.18s ease, box-shadow 0.18s ease;
-    }
-
-    .scoop:hover { transform: scale(1.05); }
-
-    .scoop.dragging {
-      opacity: 0.75;
-      transform: scale(1.09);
-      box-shadow: 0 18px 30px rgba(0,0,0,0.22);
-    }
-
-    .green { background: linear-gradient(135deg, #9de89e, #5fcf86); }
-    .purple { background: linear-gradient(135deg, #d8a6ff, #ba76ff); }
-    .pink { background: linear-gradient(135deg, #ffb5e0, #ff7fcb); }
-    .blue { background: linear-gradient(135deg, #9feaff, #59d3ff); }
-    .brown { background: linear-gradient(135deg, #d6b083, #b98556); }
-
-    .cups-area {
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
-    }
-
-    .instruction-box {
-      background: linear-gradient(135deg, #f9fdff, #fffdf7);
-      border: 1px solid rgba(0,0,0,0.06);
-      border-radius: 18px;
-      padding: 14px 18px;
-      line-height: 2;
-      font-size: 1.05rem;
-      font-weight: 700;
-      color: #345;
-    }
-
-    .cups {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 18px;
-      margin-top: 8px;
-    }
-
-    .drop-zone {
-      min-height: 200px;
-      border-radius: 18px;
-      padding: 12px;
-      background: linear-gradient(180deg, #fffef7, #fff5db);
-      border: 2px dashed #d8b76f;
-      text-align: center;
-      position: relative;
-      transition: 0.2s;
-    }
-
-    .drop-zone.over {
-      transform: scale(1.02);
-      box-shadow: 0 0 0 5px rgba(255, 215, 77, 0.22);
-      border-color: #f1a208;
-    }
-
-    .cup-top {
-      font-size: 1.45rem;
-      font-weight: 900;
-      background: linear-gradient(90deg, #d69328, #b37219);
-      color: white;
-      border-radius: 12px;
-      padding: 10px;
-      margin-bottom: 10px;
-    }
-
-    .drop-area {
-      min-height: 110px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 16px;
-      background:
-        repeating-linear-gradient(
-          45deg,
-          rgba(226, 189, 126, 0.35),
-          rgba(226, 189, 126, 0.35) 10px,
-          rgba(255,255,255,0.35) 10px,
-          rgba(255,255,255,0.35) 20px
-        );
-      color: #8b6d3b;
-      font-weight: 800;
-      font-size: 1rem;
-      padding: 10px;
+      opacity: .08;
+      font-size: 56px;
       overflow: hidden;
     }
-
-    .drop-area .scoop {
-      margin: auto;
-      cursor: default;
+    .math-bg span {
+      position: absolute;
+      animation: floaty 14s linear infinite;
     }
-
-    .result-message {
-      margin-top: 16px;
-      border-radius: 16px;
-      padding: 12px 14px;
-      font-weight: 800;
+    @keyframes floaty {
+      from { transform: translateY(40px); opacity: 0; }
+      15% { opacity: .6; }
+      85% { opacity: .6; }
+      to { transform: translateY(-120px); opacity: 0; }
+    }
+    .app-shell {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 18px;
+      min-height: 100vh;
+      padding: 18px;
+    }
+    .sidebar {
+      background: rgba(255,255,255,.09);
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 24px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 18px 45px rgba(0,0,0,.24);
+      padding: 18px;
+      position: sticky;
+      top: 18px;
+      height: calc(100vh - 36px);
+      overflow-y: auto;
+    }
+    .content {
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 28px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 18px 45px rgba(0,0,0,.2);
+      padding: 18px 22px 28px;
+      min-height: calc(100vh - 36px);
+    }
+    .hero {
       text-align: center;
-      display: none;
+      padding: 20px 16px 10px;
     }
-
-    .result-message.success {
-      display: block;
-      background: #e8fff0;
-      color: #1d7a45;
-      border: 1px solid #9ed8b2;
+    .hero h1, .hero h2, .hero h3, .hero p { margin: 8px 0; }
+    .school { font-size: 31px; font-weight: 700; color: #fff; }
+    .center { font-size: 22px; color: #c6f0ff; }
+    .library { font-size: 22px; color: #ffe7a5; }
+    .lesson-meta {
+      margin-top: 18px;
+      display: inline-block;
+      padding: 16px 28px;
+      border-radius: 22px;
+      background: linear-gradient(135deg, rgba(255,255,255,.16), rgba(255,255,255,.08));
+      border: 1px solid rgba(255,255,255,.2);
+      box-shadow: 0 12px 28px rgba(0,0,0,.18);
     }
+    .lesson-meta .big-title { font-size: 30px; color: #fff1b8; font-weight: 700; }
+    .lesson-meta .small { font-size: 21px; color: #ecf7ff; }
+    .card {
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.16);
+      border-radius: 24px;
+      padding: 18px;
+      margin-bottom: 16px;
+      box-shadow: 0 10px 25px rgba(0,0,0,.15);
+    }
+    .control-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 14px 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,.2);
+      background: rgba(255,255,255,.9);
+      color: #10234b;
+      font-size: 18px;
+      font-family: inherit;
+      outline: none;
+    }
+    .btn {
+      border: none;
+      border-radius: 18px;
+      padding: 14px 16px;
+      font-family: inherit;
+      font-size: 18px;
+      cursor: pointer;
+      color: #fff;
+      transition: .2s ease;
+      box-shadow: 0 10px 20px rgba(0,0,0,.18);
+    }
+    .btn:hover { transform: translateY(-2px); }
+    .btn-primary { background: linear-gradient(135deg, #f39c12, #e67e22); }
+    .btn-secondary { background: linear-gradient(135deg, #26a69a, #1e88e5); }
+    .btn-danger { background: linear-gradient(135deg, #ef5350, #d81b60); }
+    .btn-muted { background: linear-gradient(135deg, #7f8fa6, #57606f); }
+    .stage { display: none; }
+    .stage.active { display: block; }
 
-    .result-message.error {
+    .activity-board {
+      background: #f8f3fb;
+      color: #1d2445;
+      border-radius: 28px;
+      padding: 26px 24px 20px;
+      min-height: 640px;
+      position: relative;
+      overflow: hidden;
+    }
+    .notebook-rings {
+      position: absolute;
+      left: 10px;
+      top: 100px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .notebook-rings span {
+      width: 26px;
+      height: 8px;
+      border-radius: 8px;
+      background: #d0d0d7;
       display: block;
-      background: #fff0f0;
-      color: #b63a3a;
-      border: 1px solid #efbbbb;
+    }
+    .activity-header {
+      text-align: center;
+      margin-bottom: 18px;
+    }
+    .activity-banner {
+      display: inline-flex;
+      align-items: center;
+      gap: 16px;
+      background: #f7d67e;
+      color: #d43f2f;
+      padding: 10px 20px;
+      border-radius: 18px;
+      font-size: 28px;
+      font-weight: 700;
+      box-shadow: 0 6px 14px rgba(0,0,0,.12);
+    }
+    .activity-subline {
+      color: #2f9d48;
+      font-size: 17px;
+      font-weight: 700;
+      margin-top: 10px;
+    }
+    .activity-question {
+      text-align: center;
+      color: #4a61b3;
+      font-size: 25px;
+      line-height: 1.8;
+      font-weight: 700;
+      margin: 20px auto 18px;
+      max-width: 980px;
+    }
+    .pink-box {
+      background: #ef8fa1;
+      border-radius: 0;
+      max-width: 660px;
+      margin: 0 auto 28px;
+      padding: 22px 18px;
+      color: #232323;
+      font-size: 30px;
+      letter-spacing: 10px;
+      text-align: center;
+      line-height: 1.7;
+    }
+    .a1-layout {
+      display: grid;
+      grid-template-columns: 190px 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+    .draggables {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      align-items: center;
+      padding-top: 6px;
+    }
+    .drag-item {
+      width: 132px;
+      height: 96px;
+      border-radius: 48% 48% 42% 42% / 56% 56% 38% 38%;
+      border: 3px solid rgba(0,0,0,.48);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 34px;
+      font-weight: 700;
+      cursor: grab;
+      box-shadow: 0 7px 12px rgba(0,0,0,.14);
+      position: relative;
+      user-select: none;
+    }
+    .drag-item::before, .drag-item::after {
+      content: '';
+      position: absolute;
+      bottom: 10px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: inherit;
+      border: 3px solid rgba(0,0,0,.48);
+    }
+    .drag-item::before { left: -3px; }
+    .drag-item::after { right: -3px; }
+    .c-green { background: #8dcf8b; }
+    .c-purple { background: #d78cf3; }
+    .c-pink { background: #f8a0d3; }
+    .c-blue { background: #79daf1; }
+    .c-brown { background: #c79a62; }
+
+    .drop-section-title {
+      text-align: right;
+      color: #5569bf;
+      font-size: 28px;
+      font-weight: 700;
+      margin: 10px 0 18px;
+    }
+    .cups-row {
+      display: flex;
+      justify-content: center;
+      gap: 44px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }
+    .cup-wrap { text-align: center; }
+    .cup {
+      width: 170px;
+      height: 150px;
+      position: relative;
+      filter: drop-shadow(0 6px 10px rgba(0,0,0,.16));
+    }
+    .cup-top {
+      position: absolute;
+      top: 0;
+      left: 10px;
+      width: 150px;
+      height: 34px;
+      background: linear-gradient(180deg, #f8d48c, #ebbd66);
+      border: 2px solid #9a6e2b;
+      border-radius: 14px 14px 8px 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+      font-weight: 700;
+      color: #5a3912;
+      z-index: 2;
+    }
+    .cup-body {
+      position: absolute;
+      top: 24px;
+      left: 18px;
+      width: 134px;
+      height: 116px;
+      background:
+        linear-gradient(135deg, transparent 0 47%, rgba(180,126,50,.35) 48% 50%, transparent 51%),
+        linear-gradient(45deg, transparent 0 47%, rgba(180,126,50,.35) 48% 50%, transparent 51%),
+        linear-gradient(180deg, #f9e0ad, #e9b86f);
+      clip-path: polygon(8% 0, 92% 0, 76% 100%, 24% 100%);
+      border: 2px solid #9a6e2b;
+    }
+    .dropzone {
+      position: absolute;
+      inset: 38px 32px 18px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 30px;
+      font-weight: 700;
+      color: #5c4528;
+      z-index: 3;
+    }
+    .dropzone.drag-over {
+      outline: 3px dashed #d55a00;
+      border-radius: 20px;
+    }
+    .placeholder {
+      color: rgba(76,56,34,.45);
+      font-size: 17px;
+      line-height: 1.4;
+      letter-spacing: normal;
     }
 
     .question-card {
-      background: linear-gradient(135deg, #f9fcff, #fff8fb);
-      border-radius: 24px;
-      padding: 22px;
-      border: 1px solid rgba(0,0,0,0.06);
-      margin-top: 12px;
+      background: #fff;
+      color: #111;
+      border: 3px solid #1f1f1f;
+      border-radius: 20px;
+      padding: 24px;
+      margin-bottom: 18px;
+      box-shadow: 0 12px 22px rgba(0,0,0,.14);
     }
-
-    .question-number {
-      display: inline-block;
-      background: linear-gradient(90deg, #5b9df9, #8b63ff);
-      color: #fff;
-      padding: 8px 14px;
-      border-radius: 999px;
-      font-weight: 900;
-      margin-bottom: 14px;
+    .q-num {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 10px;
     }
-
-    .question-text {
-      font-size: 1.45rem;
-      font-weight: 900;
-      color: #223;
-      line-height: 2;
+    .q-text {
+      font-size: 30px;
+      font-weight: 700;
+      line-height: 1.9;
       margin-bottom: 18px;
     }
-
-    .options {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 14px;
-    }
-
-    .option-btn {
-      border: 2px solid #d8e2f5;
-      border-radius: 18px;
-      padding: 16px;
-      background: #fff;
-      cursor: pointer;
-      font-size: 1.2rem;
-      font-weight: 800;
-      transition: 0.2s;
-    }
-
-    .option-btn:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 18px rgba(80, 110, 180, 0.12);
-    }
-
-    .option-btn.correct {
-      background: #eafff0;
-      border-color: #52ba7a;
-      color: #156a39;
-    }
-
-    .option-btn.wrong {
-      background: #fff1f1;
-      border-color: #e26868;
-      color: #a92f2f;
-    }
-
-    .progress-wrap { margin-top: 18px; }
-
-    .progress-bar {
-      height: 16px;
-      background: #e6edfb;
-      border-radius: 999px;
-      overflow: hidden;
-    }
-
-    .progress-fill {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, #2ea5ff, #8f62ff, #ff8a65);
-      transition: width 0.35s ease;
-    }
-
-    .progress-text {
-      margin-top: 8px;
-      font-weight: 800;
-      color: #456;
+    .boxed-values {
+      border: 4px solid #000;
+      border-radius: 22px;
+      padding: 18px 22px;
       text-align: center;
-    }
-
-    .finish-card {
-      text-align: center;
-      padding: 36px 18px;
-      background: linear-gradient(135deg, #effcff, #fff8ef);
-      border-radius: 24px;
-      border: 2px dashed #b7c8ea;
-    }
-
-    .finish-card h2 {
-      margin: 0 0 12px;
-      font-size: 2rem;
-      color: #214f88;
-    }
-
-    .finish-card p {
-      font-size: 1.15rem;
+      font-size: 32px;
       font-weight: 700;
-      line-height: 2;
-      color: #345;
+      width: fit-content;
+      margin: 12px auto 24px;
+      background: #fff;
     }
-
-    footer {
+    .instruction {
+      text-align: center;
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 18px;
+    }
+    .choices {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(180px, 1fr));
+      gap: 16px;
+      max-width: 780px;
+      margin: 0 auto;
+    }
+    .choice-btn {
+      background: #f7f7f7;
+      border: 2px solid #222;
+      color: #111;
+      border-radius: 18px;
+      padding: 18px;
+      font-size: 34px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: .2s ease;
+      min-height: 92px;
+    }
+    .choice-btn:hover { transform: translateY(-2px); }
+    .choice-btn.correct { background: #d9f7d9; border-color: #2e7d32; color: #175e20; }
+    .choice-btn.wrong { background: #ffe1e1; border-color: #d32f2f; color: #8b0000; }
+    .input-area {
+      max-width: 700px;
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
+    .answer-row {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 16px;
+      align-items: center;
+    }
+    .answer-label {
+      font-size: 28px;
+      font-weight: 700;
+    }
+    .answer-row input {
+      font-size: 28px;
+      text-align: center;
+      border: 2px solid #222;
+      border-radius: 14px;
+    }
+    .result-box {
+      text-align: center;
+      background: linear-gradient(135deg, rgba(255,255,255,.18), rgba(255,255,255,.08));
+      border: 1px solid rgba(255,255,255,.2);
+      border-radius: 28px;
+      padding: 34px 20px;
+      margin-top: 22px;
+    }
+    .result-box h2 { font-size: 36px; margin: 0 0 10px; color: #ffe39c; }
+    .result-box p { font-size: 24px; margin: 10px 0; }
+    .footer-credit {
       margin-top: 18px;
       text-align: center;
-      background: rgba(255,255,255,0.82);
-      border: 2px solid rgba(120, 150, 255, 0.18);
-      backdrop-filter: blur(8px);
-      border-radius: 22px;
-      padding: 16px;
-      font-size: 1.05rem;
-      font-weight: 800;
-      color: #334;
-      box-shadow: 0 12px 35px rgba(61, 90, 128, 0.1);
+      color: #eef7ff;
+      font-size: 18px;
+      line-height: 1.9;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255,255,255,.15);
     }
-
+    .leader-block h3 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      color: #ffe39c;
+    }
+    .leader-item {
+      display: grid;
+      grid-template-columns: 34px 1fr auto;
+      align-items: center;
+      gap: 10px;
+      background: rgba(255,255,255,.08);
+      padding: 10px 12px;
+      border-radius: 16px;
+      margin-bottom: 10px;
+      font-size: 16px;
+    }
+    .medal {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      background: rgba(255,255,255,.18);
+    }
+    .tiny {
+      color: #d6e7ff;
+      font-size: 15px;
+      line-height: 1.7;
+    }
+    .timer-box, .group-box {
+      background: rgba(255,255,255,.08);
+      border-radius: 20px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .timer-value {
+      font-size: 38px;
+      font-weight: 700;
+      color: #ffe39c;
+      text-align: center;
+    }
+    .hidden { display: none !important; }
     @media (max-width: 1100px) {
-      .main-grid { grid-template-columns: 1fr; }
-      .side-panel { position: static; }
-      .activity-layout { grid-template-columns: 1fr; }
-      .cups { grid-template-columns: 1fr; }
-    }
-
-    @media (max-width: 760px) {
-      .school { font-size: 1.4rem; }
-      .lesson-title { font-size: 1.45rem; }
-      .dataset-box { font-size: 1.5rem; }
-      .options { grid-template-columns: 1fr; }
-      .question-text { font-size: 1.15rem; }
+      .app-shell { grid-template-columns: 1fr; }
+      .sidebar { position: static; height: auto; }
+      .a1-layout { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
   <div class="math-bg">
-    <div>∑</div><div>π</div><div>x̄</div><div>√</div><div>∞</div><div>Δ</div>
-    <div>÷</div><div>∫</div><div>≈</div><div>±</div><div>∑</div><div>π</div>
-    <div>x̄</div><div>√</div><div>∞</div><div>Δ</div><div>÷</div><div>∫</div>
+    <span style="right:5%; top:82%; animation-delay:0s;">∑</span>
+    <span style="right:18%; top:90%; animation-delay:2s;">π</span>
+    <span style="right:72%; top:88%; animation-delay:5s;">√</span>
+    <span style="right:48%; top:92%; animation-delay:8s;">÷</span>
+    <span style="right:88%; top:87%; animation-delay:3s;">+</span>
+    <span style="right:33%; top:85%; animation-delay:7s;">%</span>
+    <span style="right:58%; top:94%; animation-delay:10s;">x̄</span>
   </div>
 
-  <div class="container">
-    <header class="top-header">
-      <div class="school">مدرسة سلمى بنت قيس للتعليم الأساسي (5–12)</div>
-      <div class="center-title">مركز مصادر التعلّم</div>
-      <div class="platform-title">المكتبة الرقمية التفاعلية</div>
-      <div class="lesson-title">الرياضيات – الفصل الدراسي الثاني – الصف السابع</div>
-      <div class="lesson-subtitle">الوحدة والدرس: 14-2<br>المقاييس الإحصائية والمدى</div>
-    </header>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="group-box">
+        <div class="tiny">اسم المجموعة الحالية</div>
+        <div id="currentGroup" style="font-size:26px;font-weight:700;text-align:center;margin-top:8px;">—</div>
+      </div>
 
-    <div class="main-grid">
-      <aside class="side-panel">
-        <div class="panel-title">لوحة المجموعات والصدارة 🏆</div>
+      <div class="timer-box">
+        <div class="tiny" style="text-align:center;">المؤقت</div>
+        <div class="timer-value" id="timerDisplay">00:00</div>
+      </div>
 
-        <div class="group-box">
-          <label for="groupName">اسم المجموعة</label>
-          <input type="text" id="groupName" placeholder="اكتبي اسم المجموعة هنا" />
-          <button class="btn btn-primary" onclick="startLesson()">ابدأ النشاط 🚀</button>
-        </div>
+      <div class="card leader-block">
+        <h3>🏆 صدارة النشاط الأول</h3>
+        <div id="leaderboard1"></div>
+      </div>
 
-        <div class="timer-box">
-          <div class="panel-title" style="margin-bottom:8px;">⏱️ المؤقت</div>
-          <div class="timer" id="timerDisplay">00:00</div>
-        </div>
+      <div class="card leader-block">
+        <h3>🏆 صدارة النشاط الثاني</h3>
+        <div id="leaderboard2"></div>
+      </div>
 
-        <div class="status-box">
-          <div class="panel-title" style="margin-bottom:8px;">حالة التقدم</div>
-          <div class="small-note" id="statusText">أدخلي اسم المجموعة ثم ابدئي الدرس.</div>
-        </div>
+      <div class="card">
+        <button class="btn btn-secondary" style="width:100%;margin-bottom:10px;" onclick="refreshLeaderboards()">🔄 تحديث المجموعات</button>
+        <button class="btn btn-danger" style="width:100%;" onclick="clearAllParticipants()">🗑 مسح المشاركين</button>
+      </div>
 
-        <div class="leaderboard-box">
-          <div class="panel-title" style="margin-bottom:8px;">صدارة النشاط الأول 🍦</div>
-          <ul class="leaderboard-list" id="leaderboard1"></ul>
-          <button class="btn btn-secondary" onclick="renderLeaderboards()">تحديث المجموعات</button>
-          <button class="btn btn-danger" onclick="clearLeaderboard('activity1')">مسح المشاركين</button>
-        </div>
+      <div class="card tiny">
+        <div>• الصدارة محدثة لجميع الأجهزة.</div>
+        <div>• النشاط الأول: سحب وإفلات.</div>
+        <div>• النشاط الثاني: أسئلة تفاعلية.</div>
+      </div>
+    </aside>
 
-        <div class="leaderboard-box">
-          <div class="panel-title" style="margin-bottom:8px;">صدارة النشاط الثاني ⚡</div>
-          <ul class="leaderboard-list" id="leaderboard2"></ul>
-          <button class="btn btn-secondary" onclick="renderLeaderboards()">تحديث المجموعات</button>
-          <button class="btn btn-danger" onclick="clearLeaderboard('activity2')">مسح المشاركين</button>
-        </div>
-      </aside>
-
-      <main class="content-panel">
-        <section class="section active" id="section-start">
-          <div class="intro-card">
-            <h2>🎯 درس تفاعلي: المقاييس الإحصائية والمدى</h2>
-            <p>مرحبًا بكنَّ يا نجمات الرياضيات ✨</p>
-            <p>في هذا الدرس ستخوض كل مجموعة نشاطين:</p>
-            <p>🍦 النشاط الأول: سحب وإفلات</p>
-            <p>⚡ النشاط الثاني: اختيار من متعدد</p>
-            <p>وسيتم تسجيل أسرع مجموعة في قائمة الصدارة 🏆</p>
+    <main class="content">
+      <section id="stage-home" class="stage active">
+        <div class="hero">
+          <h1 class="school">مدرسة سلمى بنت قيس للتعليم الأساسي (5–12)</h1>
+          <h2 class="center">مركز مصادر التعلّم</h2>
+          <h3 class="library">المكتبة الرقمية التفاعلية</h3>
+          <div class="lesson-meta">
+            <div class="small">الرياضيات – الفصل الدراسي الثاني – الصف السابع</div>
+            <div class="big-title">الوحدة والدرس: 14-2 | المقاييس الإحصائية والمدى</div>
           </div>
-        </section>
+        </div>
 
-        <section class="section" id="section-activity1">
-          <div class="section-header">
-            <div class="section-title">🍦 النشاط الأول: اسحبي الرقم إلى الكوب الصحيح</div>
-            <div class="chip">حددي المنوال والوسيط والمدى</div>
+        <div class="card" style="max-width:760px;margin:18px auto 0;">
+          <div style="font-size:24px;font-weight:700;margin-bottom:12px;text-align:center;">ابدئي باسم المجموعة</div>
+          <input type="text" id="groupNameInput" placeholder="اكتبي اسم المجموعة هنا">
+          <div class="control-grid">
+            <button class="btn btn-primary" onclick="startActivityOne()">🚀 ابدأ النشاط الأول</button>
+            <button class="btn btn-muted" onclick="goToStage('stage-activity2-intro')">انتقال مباشر للنشاط الثاني</button>
           </div>
+        </div>
+      </section>
 
-          <div class="dataset-box">
-            ٧ ، ٢ ، -١ ، ٣ ، ٢ ، -٢ ، ٠ ، ٢ ، ٦ ، ٦ <br>
-            ٣ ، ٤ ، ٦ ، ٦ ، ٥ ، ٣ ، ٨ ، ٩ ، ٦ ، ٦ ، ٢
+      <section id="stage-activity1" class="stage">
+        <div class="activity-board">
+          <div class="notebook-rings">
+            <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
           </div>
 
-          <div class="activity-layout">
-            <div class="scoops" id="scoopsContainer">
-              <div class="scoop green" draggable="true" data-value="7">٧</div>
-              <div class="scoop purple" draggable="true" data-value="6">٦</div>
-              <div class="scoop pink" draggable="true" data-value="4">٤</div>
-              <div class="scoop blue" draggable="true" data-value="3">٣</div>
-              <div class="scoop brown" draggable="true" data-value="11">١١</div>
+          <div class="activity-header">
+            <div class="activity-banner">◀ نشاط جماعي : استراتيجية النصف والنصف الآخر ▶</div>
+            <div class="activity-subline">كتاب الطالب صفحة (١٠٠) رقم (١)</div>
+          </div>
+
+          <div class="activity-question">
+            يوضح الإطار المقابل درجات الحرارة التي سجلها بدرى الجبل الأخضر<br>
+            خلال شهري يناير ولمدة ثلاثة أسابيع يوميًا.
+          </div>
+
+          <div class="pink-box">٧ ٢ ١- ٣ ٢ ٢- ٠ ٢ ٦ ٦ &nbsp;&nbsp; ٣ ٤ ٦ ٦ ٥ ٣ ٨ ٩ ٦ ٦ ٢</div>
+
+          <div class="a1-layout">
+            <div class="draggables" id="dragContainer">
+              <div class="drag-item c-green" draggable="true" data-value="7">٧</div>
+              <div class="drag-item c-purple" draggable="true" data-value="4">٤</div>
+              <div class="drag-item c-pink" draggable="true" data-value="3">٣</div>
+              <div class="drag-item c-blue" draggable="true" data-value="6">٦</div>
+              <div class="drag-item c-brown" draggable="true" data-value="11">١١</div>
             </div>
 
-            <div class="cups-area">
-              <div class="instruction-box">
-                <strong>تعليمات النشاط:</strong><br>
-                اسحبي كرة الآيسكريم التي تحمل الرقم الصحيح إلى الكوب المناسب.<br>
-                المنوال = القيمة الأكثر تكرارًا<br>
-                الوسيط = القيمة الوسطى بعد الترتيب<br>
-                المدى = الفرق بين أكبر قيمة وأصغر قيمة
+            <div>
+              <div class="drop-section-title">أوجد ما يلي :</div>
+              <div class="cups-row">
+                <div class="cup-wrap">
+                  <div class="cup">
+                    <div class="cup-top">المنوال</div>
+                    <div class="cup-body"></div>
+                    <div class="dropzone" data-zone="المنوال"><span class="placeholder">اسحبي هنا</span></div>
+                  </div>
+                </div>
+                <div class="cup-wrap">
+                  <div class="cup">
+                    <div class="cup-top">الوسيط</div>
+                    <div class="cup-body"></div>
+                    <div class="dropzone" data-zone="الوسيط"><span class="placeholder">اسحبي هنا</span></div>
+                  </div>
+                </div>
+                <div class="cup-wrap">
+                  <div class="cup">
+                    <div class="cup-top">المدى</div>
+                    <div class="cup-body"></div>
+                    <div class="dropzone" data-zone="المدى"><span class="placeholder">اسحبي هنا</span></div>
+                  </div>
+                </div>
               </div>
 
-              <div class="cups">
-                <div class="drop-zone" data-answer="6">
-                  <div class="cup-top">المنوال</div>
-                  <div class="drop-area">اسحبي هنا</div>
-                </div>
-
-                <div class="drop-zone" data-answer="4">
-                  <div class="cup-top">الوسيط</div>
-                  <div class="drop-area">اسحبي هنا</div>
-                </div>
-
-                <div class="drop-zone" data-answer="11">
-                  <div class="cup-top">المدى</div>
-                  <div class="drop-area">اسحبي هنا</div>
-                </div>
+              <div class="control-grid" style="margin-top:26px;">
+                <button class="btn btn-secondary" onclick="checkActivityOne()">✅ تحقق من الإجابة</button>
+                <button class="btn btn-muted" onclick="resetActivityOne()">↺ إعادة النشاط</button>
               </div>
-
-              <div class="result-message" id="activity1Message"></div>
-
-              <button class="btn btn-primary" id="toActivity2Btn" onclick="goToActivity2()" style="display:none; max-width:320px;">
-                الانتقال إلى النشاط الثاني ⚡
-              </button>
+              <div id="activityOneMsg" style="margin-top:14px;font-size:22px;font-weight:700;text-align:center;"></div>
             </div>
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section class="section" id="section-activity2">
-          <div class="section-header">
-            <div class="section-title">⚡ النشاط الثاني: اختيار من متعدد</div>
-            <div class="chip">أسرع مجموعة تُسجّل في الصدارة</div>
+      <section id="stage-activity2-intro" class="stage">
+        <div class="hero">
+          <h2 class="center">النشاط الثاني</h2>
+          <div class="lesson-meta">
+            <div class="big-title">أسئلة تفاعلية عن المقاييس الإحصائية والمدى</div>
+            <div class="small">يبدأ التوقيت بمجرد الضغط على بدء النشاط</div>
           </div>
-
-          <div class="question-card">
-            <div class="question-number" id="questionNumber">السؤال 1</div>
-            <div class="question-text" id="questionText"></div>
-            <div class="options" id="optionsContainer"></div>
-
-            <div class="progress-wrap">
-              <div class="progress-bar">
-                <div class="progress-fill" id="progressFill"></div>
-              </div>
-              <div class="progress-text" id="progressText">التقدم: 0 / 4</div>
-            </div>
+        </div>
+        <div class="card" style="max-width:760px;margin:22px auto 0;">
+          <div style="font-size:22px;font-weight:700;text-align:center;margin-bottom:10px;">اسم المجموعة</div>
+          <input type="text" id="groupNameInput2" placeholder="اكتبي اسم المجموعة للنشاط الثاني">
+          <div class="control-grid">
+            <button class="btn btn-primary" onclick="startActivityTwo()">🚀 بدء النشاط الثاني</button>
+            <button class="btn btn-muted" onclick="goToStage('stage-home')">العودة للرئيسية</button>
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section class="section" id="section-finish">
-          <div class="finish-card">
-            <h2>🎉 أحسنتم يا نجمات الرياضيات!</h2>
-            <p id="finishMessage"></p>
-            <button class="btn btn-primary" style="max-width:320px; margin:auto;" onclick="restartLesson()">
-              إعادة الدرس من البداية 🔄
-            </button>
+      <section id="stage-activity2" class="stage">
+        <div id="questionsContainer"></div>
+        <div class="control-grid">
+          <button class="btn btn-secondary" onclick="submitActivityTwo()">✅ إنهاء النشاط الثاني</button>
+          <button class="btn btn-muted" onclick="resetActivityTwo()">↺ إعادة الأسئلة</button>
+        </div>
+        <div id="activityTwoMsg" style="margin-top:14px;font-size:22px;font-weight:700;text-align:center;"></div>
+      </section>
+
+      <section id="stage-result" class="stage">
+        <div class="result-box">
+          <h2>🎉 انتهى التحدي!</h2>
+          <p id="resultText"></p>
+          <p id="resultRank"></p>
+          <div class="control-grid" style="max-width:700px;margin:18px auto 0;">
+            <button class="btn btn-primary" onclick="goToStage('stage-home')">العودة للرئيسية</button>
+            <button class="btn btn-secondary" onclick="goToStage('stage-activity2-intro')">بدء النشاط الثاني</button>
           </div>
-        </section>
-      </main>
-    </div>
+        </div>
+      </section>
 
-    <footer>
-      تصميم وبرمجة المحتوى: أخصائية مركز مصادر التعلّم الأستاذة سامية المقبالية
-    </footer>
+      <div class="footer-credit">
+        <div><strong>برمجة وتصميم المحتوى:</strong></div>
+        <div>أخصائية مركز مصادر التعلّم</div>
+        <div><strong>الأستاذة سامية المقبالية</strong></div>
+      </div>
+    </main>
   </div>
 
   <script>
-    let currentGroup = "";
+    let currentGroup = '';
+    let currentActivity = '';
+    let startTime = null;
     let timerInterval = null;
-    let secondsElapsed = 0;
-    let activity1Solved = 0;
-    let activity2Index = 0;
-    let activity2Correct = 0;
+    let activityOneAnswers = { 'المنوال': null, 'الوسيط': null, 'المدى': null };
+    let activityTwoStarted = false;
+    const activityTwoQuestions = {{ questions_json | safe }};
 
-    const questions = [
-      {
-        text: "إذا كان المنوال للقيم: ٥ ، ٩ ، ٢١ ، ١٧ ، ٣س هو ٢١، فما قيمة س؟",
-        options: ["٧", "٩", "٢١", "٢٧"],
-        correct: "٧"
-      },
-      {
-        text: "المدى للقيم الآتية: ١٩ ، ٢٦ ، ١٧ ، ٣٢ ، ٢٦ يساوي:",
-        options: ["١٥", "١٦", "٢٤", "٢٦"],
-        correct: "١٥"
-      },
-      {
-        text: "يعرض الإطار أطوال ستة أشخاص بالمتر: ١٫٤٢ ، ١٫٥٤ ، ١٫٥٤ ، ١٫٦٥ ، ١٫٧٠ ، ١٫٧٢. قيمة المدى تساوي:",
-        options: ["٠٫٣٠", "٠٫٤٢", "٠٫٧٢", "١٫٥٤"],
-        correct: "٠٫٣٠"
-      },
-      {
-        text: "إذا كان الوسط الحسابي للقيم: ٣ ، ٤ ، ٧ ، ١٠ ، س يساوي ٦، فما قيمة س؟",
-        options: ["٤", "٦", "٨", "١٠"],
-        correct: "٦"
-      }
-    ];
-
-    function showSection(id) {
-      document.querySelectorAll(".section").forEach(sec => sec.classList.remove("active"));
-      document.getElementById(id).classList.add("active");
+    function goToStage(id) {
+      document.querySelectorAll('.stage').forEach(s => s.classList.remove('active'));
+      document.getElementById(id).classList.add('active');
     }
 
-    function setStatus(text) {
-      document.getElementById("statusText").textContent = text;
+    function setGroup(name) {
+      currentGroup = name.trim();
+      document.getElementById('currentGroup').textContent = currentGroup || '—';
     }
 
-    function updateTimerDisplay() {
-      const min = String(Math.floor(secondsElapsed / 60)).padStart(2, "0");
-      const sec = String(secondsElapsed % 60).padStart(2, "0");
-      document.getElementById("timerDisplay").textContent = `${min}:${sec}`;
+    function formatTime(totalSeconds) {
+      const s = Math.floor(totalSeconds % 60).toString().padStart(2, '0');
+      const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+      return `${m}:${s}`;
     }
 
     function startTimer() {
+      startTime = Date.now();
       clearInterval(timerInterval);
-      secondsElapsed = 0;
-      updateTimerDisplay();
       timerInterval = setInterval(() => {
-        secondsElapsed++;
-        updateTimerDisplay();
-      }, 1000);
+        const elapsed = (Date.now() - startTime) / 1000;
+        document.getElementById('timerDisplay').textContent = formatTime(elapsed);
+      }, 250);
     }
 
     function stopTimer() {
       clearInterval(timerInterval);
+      const elapsed = startTime ? (Date.now() - startTime) / 1000 : 0;
+      document.getElementById('timerDisplay').textContent = formatTime(elapsed);
+      return elapsed;
     }
 
-    function formatTime(seconds) {
-      const min = Math.floor(seconds / 60);
-      const sec = seconds % 60;
-      return min > 0 ? `${min}د ${sec}ث` : `${sec}ث`;
-    }
-
-    async function saveScore(activity, groupName, seconds) {
-      await fetch("/save_score", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-          activity: activity,
-          group_name: groupName,
-          seconds: seconds
-        })
-      });
-    }
-
-    async function fetchLeaderboard(activity) {
-      const response = await fetch(`/leaderboard/${activity}`);
-      return await response.json();
-    }
-
-    async function renderLeaderboards() {
-      const activity1 = await fetchLeaderboard("activity1");
-      const activity2 = await fetchLeaderboard("activity2");
-      renderSingleList("leaderboard1", activity1);
-      renderSingleList("leaderboard2", activity2);
-    }
-
-    function renderSingleList(elementId, data) {
-      const list = document.getElementById(elementId);
-      list.innerHTML = "";
-
-      if (!data.length) {
-        list.innerHTML = `<li><span>لا توجد نتائج بعد</span><span>—</span></li>`;
+    function startActivityOne() {
+      const name = document.getElementById('groupNameInput').value;
+      if (!name.trim()) {
+        alert('اكتبي اسم المجموعة أولًا');
         return;
       }
-
-      data.forEach((item, index) => {
-        const li = document.createElement("li");
-        li.innerHTML = `<span>${index + 1}. ${item.group_name}</span><span>${formatTime(item.seconds)}</span>`;
-        list.appendChild(li);
-      });
+      setGroup(name);
+      currentActivity = 'activity1';
+      resetActivityOne(false);
+      goToStage('stage-activity1');
+      startTimer();
     }
 
-    async function clearLeaderboard(activity) {
-      const ok = confirm("هل تريدين مسح المشاركين لهذه الصدارة؟");
-      if (!ok) return;
-
-      await fetch(`/clear_leaderboard/${activity}`, {
-        method: "POST"
+    function resetActivityOne(clearMsg = true) {
+      activityOneAnswers = { 'المنوال': null, 'الوسيط': null, 'المدى': null };
+      document.querySelectorAll('.dropzone').forEach(zone => {
+        zone.innerHTML = '<span class="placeholder">اسحبي هنا</span>';
       });
-
-      await renderLeaderboards();
+      document.querySelectorAll('.drag-item').forEach(item => {
+        item.style.visibility = 'visible';
+        item.style.pointerEvents = 'auto';
+      });
+      if (clearMsg) document.getElementById('activityOneMsg').textContent = '';
     }
 
-    function resetActivity1Board() {
-      document.getElementById("scoopsContainer").innerHTML = `
-        <div class="scoop green" draggable="true" data-value="7">٧</div>
-        <div class="scoop purple" draggable="true" data-value="6">٦</div>
-        <div class="scoop pink" draggable="true" data-value="4">٤</div>
-        <div class="scoop blue" draggable="true" data-value="3">٣</div>
-        <div class="scoop brown" draggable="true" data-value="11">١١</div>
-      `;
-
-      document.querySelectorAll(".drop-area").forEach(area => {
-        area.innerHTML = "اسحبي هنا";
-      });
-
-      document.getElementById("activity1Message").className = "result-message";
-      document.getElementById("activity1Message").style.display = "none";
-      document.getElementById("toActivity2Btn").style.display = "none";
-
-      enableDragDrop();
-    }
-
-    function startLesson() {
-      const name = document.getElementById("groupName").value.trim();
-      if (!name) {
-        alert("من فضلك أدخلي اسم المجموعة أولًا.");
+    function checkActivityOne() {
+      const ok = activityOneAnswers['المنوال'] === '6' && activityOneAnswers['الوسيط'] === '4' && activityOneAnswers['المدى'] === '11';
+      const msg = document.getElementById('activityOneMsg');
+      if (!activityOneAnswers['المنوال'] || !activityOneAnswers['الوسيط'] || !activityOneAnswers['المدى']) {
+        msg.style.color = '#b32121';
+        msg.textContent = 'أكملي سحب جميع القيم أولًا.';
         return;
       }
-
-      currentGroup = name;
-      activity1Solved = 0;
-      activity2Index = 0;
-      activity2Correct = 0;
-
-      resetActivity1Board();
-      showSection("section-activity1");
-      startTimer();
-      setStatus(`بدأت المجموعة: ${currentGroup} النشاط الأول 🍦`);
-    }
-
-    function enableDragDrop() {
-      const scoops = document.querySelectorAll(".scoop");
-      const zones = document.querySelectorAll(".drop-zone");
-
-      scoops.forEach(scoop => {
-        scoop.addEventListener("dragstart", () => {
-          scoop.classList.add("dragging");
-        });
-
-        scoop.addEventListener("dragend", () => {
-          scoop.classList.remove("dragging");
-        });
-      });
-
-      zones.forEach(zone => {
-        zone.addEventListener("dragover", e => {
-          e.preventDefault();
-          zone.classList.add("over");
-        });
-
-        zone.addEventListener("dragleave", () => {
-          zone.classList.remove("over");
-        });
-
-        zone.addEventListener("drop", async e => {
-          e.preventDefault();
-          zone.classList.remove("over");
-
-          const dragged = document.querySelector(".dragging");
-          if (!dragged) return;
-
-          const value = dragged.dataset.value;
-          const answer = zone.dataset.answer;
-          const msg = document.getElementById("activity1Message");
-
-          if (zone.querySelector(".drop-area .scoop")) {
-            msg.className = "result-message error";
-            msg.textContent = "هذا الكوب تم تعبئته بالفعل.";
-            return;
-          }
-
-          if (value === answer) {
-            zone.querySelector(".drop-area").innerHTML = "";
-            const placed = dragged.cloneNode(true);
-            placed.classList.remove("dragging");
-            placed.setAttribute("draggable", "false");
-            zone.querySelector(".drop-area").appendChild(placed);
-            dragged.remove();
-            activity1Solved++;
-
-            msg.className = "result-message success";
-            msg.textContent = "أحسنتِ! إجابة صحيحة ✅";
-
-            if (activity1Solved === 3) {
-              stopTimer();
-              await saveScore("activity1", currentGroup, secondsElapsed);
-              await renderLeaderboards();
-              msg.className = "result-message success";
-              msg.textContent = `🎉 ممتاز! أنهت المجموعة ${currentGroup} النشاط الأول في ${formatTime(secondsElapsed)}.`;
-              document.getElementById("toActivity2Btn").style.display = "block";
-              setStatus(`أكملت المجموعة ${currentGroup} النشاط الأول 🍦`);
-            }
-          } else {
-            msg.className = "result-message error";
-            msg.textContent = "المكان غير صحيح، حاولي مرة أخرى ✖";
-          }
-        });
-      });
-    }
-
-    function goToActivity2() {
-      activity2Index = 0;
-      activity2Correct = 0;
-      showSection("section-activity2");
-      startTimer();
-      loadQuestion();
-      setStatus(`بدأت المجموعة ${currentGroup} النشاط الثاني ⚡`);
-    }
-
-    function loadQuestion() {
-      const q = questions[activity2Index];
-      document.getElementById("questionNumber").textContent = `السؤال ${activity2Index + 1}`;
-      document.getElementById("questionText").textContent = q.text;
-
-      const optionsContainer = document.getElementById("optionsContainer");
-      optionsContainer.innerHTML = "";
-
-      q.options.forEach(option => {
-        const btn = document.createElement("button");
-        btn.className = "option-btn";
-        btn.textContent = option;
-        btn.onclick = () => checkAnswer(btn, option);
-        optionsContainer.appendChild(btn);
-      });
-
-      updateProgress();
-    }
-
-    function updateProgress() {
-      const total = questions.length;
-      const current = activity2Index;
-      const percent = (current / total) * 100;
-      document.getElementById("progressFill").style.width = percent + "%";
-      document.getElementById("progressText").textContent = `التقدم: ${current} / ${total}`;
-    }
-
-    function checkAnswer(button, selected) {
-      const q = questions[activity2Index];
-      const buttons = document.querySelectorAll(".option-btn");
-      buttons.forEach(btn => btn.disabled = true);
-
-      if (selected === q.correct) {
-        button.classList.add("correct");
-        activity2Correct++;
-      } else {
-        button.classList.add("wrong");
-        buttons.forEach(btn => {
-          if (btn.textContent === q.correct) {
-            btn.classList.add("correct");
-          }
-        });
+      if (!ok) {
+        msg.style.color = '#b32121';
+        msg.textContent = 'بعض الإجابات غير صحيحة. حاولي مرة أخرى.';
+        return;
       }
+      msg.style.color = '#16752c';
+      msg.textContent = 'أحسنتِ! تم حل النشاط الأول بنجاح.';
+      const elapsed = stopTimer();
+      saveAttempt('activity1', currentGroup, elapsed, 100).then(rank => {
+        document.getElementById('resultText').textContent = `المجموعة: ${currentGroup} | زمن النشاط الأول: ${formatTime(elapsed)}`;
+        document.getElementById('resultRank').textContent = rank ? `ترتيبكم الحالي في النشاط الأول: ${rank}` : '';
+        goToStage('stage-result');
+        refreshLeaderboards();
+      });
+    }
 
-      setTimeout(() => {
-        activity2Index++;
-        if (activity2Index < questions.length) {
-          loadQuestion();
+    function startActivityTwo() {
+      const name = document.getElementById('groupNameInput2').value || currentGroup;
+      if (!name.trim()) {
+        alert('اكتبي اسم المجموعة أولًا');
+        return;
+      }
+      setGroup(name);
+      currentActivity = 'activity2';
+      renderQuestions();
+      activityTwoStarted = true;
+      document.getElementById('activityTwoMsg').textContent = '';
+      goToStage('stage-activity2');
+      startTimer();
+    }
+
+    function renderQuestions() {
+      const container = document.getElementById('questionsContainer');
+      container.innerHTML = '';
+      activityTwoQuestions.forEach((q, idx) => {
+        const card = document.createElement('div');
+        card.className = 'question-card';
+        let html = `<div class="q-num">${idx + 1}</div><div class="q-text">${q.text}</div>`;
+        if (q.type === 'mcq') {
+          html += `<div class="instruction">حوط الإجابة الصحيحة</div><div class="choices">`;
+          q.choices.forEach(choice => {
+            html += `<button class="choice-btn" data-qid="${q.id}" data-value="${choice}" onclick="answerMCQ(this)">${choice}</button>`;
+          });
+          html += `</div>`;
         } else {
-          finishActivity2();
+          html += `<div class="boxed-values">${q.frame_values}</div>`;
+          html += `<div class="instruction">أوجد ما يلي :</div><div class="input-area">`;
+          q.fields.forEach(field => {
+            html += `
+              <div class="answer-row">
+                <div class="answer-label">${field.label}</div>
+                <input type="text" data-qid="${q.id}" data-field="${field.name}" placeholder="اكتبي الإجابة هنا">
+              </div>`;
+          });
+          html += `</div>`;
         }
-      }, 1100);
+        card.innerHTML = html;
+        container.appendChild(card);
+      });
     }
 
-    async function finishActivity2() {
-      stopTimer();
-      await saveScore("activity2", currentGroup, secondsElapsed);
-      await renderLeaderboards();
-
-      document.getElementById("progressFill").style.width = "100%";
-      document.getElementById("progressText").textContent = `التقدم: ${questions.length} / ${questions.length}`;
-
-      document.getElementById("finishMessage").innerHTML =
-        `أنهت المجموعة <strong>${currentGroup}</strong> النشاط الثاني في <strong>${formatTime(secondsElapsed)}</strong>.<br>` +
-        `عدد الإجابات الصحيحة: <strong>${activity2Correct}</strong> من <strong>${questions.length}</strong> 🌟`;
-
-      showSection("section-finish");
-      setStatus(`انتهت المجموعة ${currentGroup} من النشاط الثاني وتم حفظ النتيجة 🏆`);
+    function normalizeArabicNumber(val) {
+      return (val || '')
+        .replace(/\s+/g, '')
+        .replace(/٠/g, '0').replace(/١/g, '1').replace(/٢/g, '2').replace(/٣/g, '3').replace(/٤/g, '4')
+        .replace(/٥/g, '5').replace(/٦/g, '6').replace(/٧/g, '7').replace(/٨/g, '8').replace(/٩/g, '9')
+        .replace(/٫/g, '.')
+        .replace(/,/g, '')
+        .replace(/،/g, '');
     }
 
-    function restartLesson() {
-      stopTimer();
-      secondsElapsed = 0;
-      updateTimerDisplay();
-      currentGroup = "";
-      activity1Solved = 0;
-      activity2Index = 0;
-      activity2Correct = 0;
-      document.getElementById("groupName").value = "";
-      resetActivity1Board();
-      showSection("section-start");
-      setStatus("أدخلي اسم المجموعة ثم ابدئي الدرس.");
+    function answerMCQ(btn) {
+      const qid = Number(btn.dataset.qid);
+      const q = activityTwoQuestions.find(x => x.id === qid);
+      const parent = btn.parentElement;
+      [...parent.querySelectorAll('.choice-btn')].forEach(b => {
+        b.disabled = true;
+        if (b.dataset.value === q.answer) b.classList.add('correct');
+      });
+      if (btn.dataset.value !== q.answer) btn.classList.add('wrong');
     }
 
-    enableDragDrop();
-    renderLeaderboards();
+    function submitActivityTwo() {
+      const msg = document.getElementById('activityTwoMsg');
+      let score = 0;
+      let total = 0;
 
-    setInterval(renderLeaderboards, 5000);
+      activityTwoQuestions.forEach(q => {
+        if (q.type === 'mcq') {
+          total += 1;
+          const buttons = document.querySelectorAll(`.choice-btn[data-qid="${q.id}"]`);
+          const selected = [...buttons].find(b => b.classList.contains('correct') || b.classList.contains('wrong'));
+          if (selected) {
+            const clickedWrong = [...buttons].some(b => b.classList.contains('wrong'));
+            if (!clickedWrong) score += 1;
+          }
+        } else {
+          total += q.fields.length;
+          q.fields.forEach(field => {
+            const input = document.querySelector(`input[data-qid="${q.id}"][data-field="${field.name}"]`);
+            const user = normalizeArabicNumber(input.value);
+            const ans = normalizeArabicNumber(q.answers[field.name]);
+            if (user === ans) {
+              score += 1;
+              input.style.background = '#d9f7d9';
+            } else {
+              input.style.background = '#ffe1e1';
+            }
+          });
+        }
+      });
+
+      const elapsed = stopTimer();
+      msg.style.color = '#16752c';
+      msg.textContent = `تم إنهاء النشاط الثاني. الدرجة: ${score} / ${total}`;
+      saveAttempt('activity2', currentGroup, elapsed, score).then(rank => {
+        document.getElementById('resultText').textContent = `المجموعة: ${currentGroup} | زمن النشاط الثاني: ${formatTime(elapsed)} | الدرجة: ${score}/${total}`;
+        document.getElementById('resultRank').textContent = rank ? `ترتيبكم الحالي في النشاط الثاني: ${rank}` : '';
+        goToStage('stage-result');
+        refreshLeaderboards();
+      });
+    }
+
+    function resetActivityTwo() {
+      renderQuestions();
+      document.getElementById('activityTwoMsg').textContent = '';
+    }
+
+    async function saveAttempt(activity, groupName, elapsed, score) {
+      const res = await fetch('/api/save_attempt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ activity, group_name: groupName, elapsed_seconds: elapsed, score })
+      });
+      const data = await res.json();
+      return data.rank;
+    }
+
+    async function refreshLeaderboards() {
+      const res = await fetch('/api/leaderboards');
+      const data = await res.json();
+      renderLeaderboard('leaderboard1', data.activity1 || []);
+      renderLeaderboard('leaderboard2', data.activity2 || []);
+    }
+
+    function renderLeaderboard(targetId, rows) {
+      const holder = document.getElementById(targetId);
+      if (!rows.length) {
+        holder.innerHTML = '<div class="tiny">لا توجد نتائج بعد.</div>';
+        return;
+      }
+      const medals = ['🥇', '🥈', '🥉'];
+      holder.innerHTML = rows.map((row, idx) => `
+        <div class="leader-item">
+          <div class="medal">${medals[idx] || (idx + 1)}</div>
+          <div>
+            <div style="font-weight:700;">${row.group_name}</div>
+            <div class="tiny">درجة: ${row.score}</div>
+          </div>
+          <div style="font-weight:700;">${formatTime(row.elapsed_seconds)}</div>
+        </div>
+      `).join('');
+    }
+
+    async function clearAllParticipants() {
+      const ok = confirm('هل تريدين بالفعل مسح جميع المشاركين والنتائج؟');
+      if (!ok) return;
+      await fetch('/api/clear_attempts', { method: 'POST' });
+      refreshLeaderboards();
+      alert('تم مسح المشاركين بنجاح.');
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      refreshLeaderboards();
+
+      let dragged = null;
+      document.querySelectorAll('.drag-item').forEach(item => {
+        item.addEventListener('dragstart', e => {
+          dragged = item;
+          e.dataTransfer.setData('text/plain', item.dataset.value);
+        });
+      });
+
+      document.querySelectorAll('.dropzone').forEach(zone => {
+        zone.addEventListener('dragover', e => {
+          e.preventDefault();
+          zone.classList.add('drag-over');
+        });
+        zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+        zone.addEventListener('drop', e => {
+          e.preventDefault();
+          zone.classList.remove('drag-over');
+          if (!dragged) return;
+          const value = dragged.dataset.value;
+          const zoneName = zone.dataset.zone;
+
+          const previousZone = Object.keys(activityOneAnswers).find(k => activityOneAnswers[k] === value);
+          if (previousZone) {
+            activityOneAnswers[previousZone] = null;
+            const prevZoneEl = document.querySelector(`.dropzone[data-zone="${previousZone}"]`);
+            prevZoneEl.innerHTML = '<span class="placeholder">اسحبي هنا</span>';
+          }
+
+          activityOneAnswers[zoneName] = value;
+          zone.textContent = dragged.textContent;
+          dragged.style.visibility = 'hidden';
+          dragged.style.pointerEvents = 'none';
+          dragged = null;
+        });
+      });
+    });
   </script>
 </body>
 </html>
-"""
+'''
 
-def get_db_connection():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    return conn
 
-def init_db():
-    conn = get_db_connection()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS leaderboard (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            activity TEXT NOT NULL,
-            group_name TEXT NOT NULL,
-            seconds INTEGER NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
-    conn.commit()
-    conn.close()
+@app.route('/')
+def home():
+    return render_template_string(PAGE, questions_json=json.dumps(ACTIVITY_TWO_QUESTIONS, ensure_ascii=False))
 
-@app.route("/")
-def index():
-    return render_template_string(HTML_PAGE)
 
-@app.route("/save_score", methods=["POST"])
-def save_score():
+@app.route('/api/save_attempt', methods=['POST'])
+def save_attempt():
     data = request.get_json(force=True)
-    activity = (data.get("activity") or "").strip()
-    group_name = (data.get("group_name") or "").strip()
-    seconds = data.get("seconds")
+    activity = data.get('activity', '').strip()
+    group_name = data.get('group_name', '').strip()
+    elapsed_seconds = float(data.get('elapsed_seconds', 0))
+    score = int(data.get('score', 0))
 
-    if activity not in ["activity1", "activity2"]:
-      return jsonify({"success": False, "message": "نوع نشاط غير صحيح"}), 400
+    if activity not in ('activity1', 'activity2') or not group_name or elapsed_seconds <= 0:
+        return jsonify({'ok': False, 'error': 'بيانات غير صالحة'}), 400
 
-    if not group_name:
-      return jsonify({"success": False, "message": "اسم المجموعة مطلوب"}), 400
-
-    try:
-      seconds = int(seconds)
-    except Exception:
-      return jsonify({"success": False, "message": "الزمن غير صحيح"}), 400
-
-    conn = get_db_connection()
-    conn.execute(
-        "INSERT INTO leaderboard (activity, group_name, seconds, created_at) VALUES (?, ?, ?, ?)",
-        (activity, group_name, seconds, datetime.now().isoformat())
+    created_at = datetime.utcnow().isoformat()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        'INSERT INTO attempts (activity, group_name, elapsed_seconds, score, created_at) VALUES (?, ?, ?, ?, ?)',
+        (activity, group_name, elapsed_seconds, score, created_at)
     )
     conn.commit()
-    conn.close()
 
-    return jsonify({"success": True})
-
-@app.route("/leaderboard/<activity>")
-def leaderboard(activity):
-    if activity not in ["activity1", "activity2"]:
-        return jsonify([])
-
-    conn = get_db_connection()
-    rows = conn.execute("""
-        SELECT group_name, seconds
-        FROM leaderboard
+    cur.execute(
+        '''
+        SELECT group_name, MIN(elapsed_seconds) AS best_time, MAX(score) AS best_score
+        FROM attempts
         WHERE activity = ?
-        ORDER BY seconds ASC, id ASC
-        LIMIT 10
-    """, (activity,)).fetchall()
+        GROUP BY group_name
+        ORDER BY best_time ASC, best_score DESC, group_name ASC
+        ''',
+        (activity,)
+    )
+    rows = cur.fetchall()
     conn.close()
 
-    results = [{"group_name": row["group_name"], "seconds": row["seconds"]} for row in rows]
-    return jsonify(results)
+    rank = None
+    for idx, row in enumerate(rows, start=1):
+        if row['group_name'] == group_name:
+            rank = idx
+            break
 
-@app.route("/clear_leaderboard/<activity>", methods=["POST"])
-def clear_leaderboard(activity):
-    if activity not in ["activity1", "activity2"]:
-        return jsonify({"success": False, "message": "نوع نشاط غير صحيح"}), 400
+    return jsonify({'ok': True, 'rank': rank})
 
-    conn = get_db_connection()
-    conn.execute("DELETE FROM leaderboard WHERE activity = ?", (activity,))
+
+@app.route('/api/leaderboards')
+def leaderboards():
+    conn = get_db()
+    cur = conn.cursor()
+    result = {}
+    for activity in ('activity1', 'activity2'):
+        cur.execute(
+            '''
+            SELECT group_name,
+                   MIN(elapsed_seconds) AS elapsed_seconds,
+                   MAX(score) AS score
+            FROM attempts
+            WHERE activity = ?
+            GROUP BY group_name
+            ORDER BY elapsed_seconds ASC, score DESC, group_name ASC
+            LIMIT 10
+            ''',
+            (activity,)
+        )
+        result[activity] = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    return jsonify(result)
+
+
+@app.route('/api/clear_attempts', methods=['POST'])
+def clear_attempts():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('DELETE FROM attempts')
     conn.commit()
     conn.close()
+    return jsonify({'ok': True})
 
-    return jsonify({"success": True})
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     init_db()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
